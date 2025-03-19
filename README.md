@@ -2,10 +2,10 @@
 
 基于Java实现的WebSocket终端服务，可通过浏览器访问宿主机的Bash环境，类似SSH的功能。特别适合Docker容器内部署后访问宿主机环境，可以自动判断是否在容器内，非容器环境则直接打开主机的tty终端。
 
-- 容器内打开容器外部宿主机tty（宿主机模式）
+- 容器内打开容器外部宿主机pty（宿主机模式）
 ![image](https://github.com/user-attachments/assets/188642e1-08bc-40b8-bbc6-3b00cc047a99)
 
-- 非容器打开主机tty（简单模式）
+- 非容器打开主机pty（简单模式）
 ![image](https://github.com/user-attachments/assets/f95898f7-6963-4631-92aa-256226bc9f6f)
 
 
