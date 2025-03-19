@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web终端 - 基于WebSocket的宿主机Bash访问</title>
+    
+    <!-- 使用CDN资源代替WebJars -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.1.0/css/xterm.min.css">
+    
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background-color: #1e1e1e;
+            color: #e0e0e0;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        
+        .header {
+            margin-bottom: 10px;
+        }
+        
+        h1 {
+            font-size: 1.5rem;
+            margin: 0 0 10px 0;
+        }
+        
+        .subtitle {
+            font-size: 0.9rem;
+            color: #aaa;
+            margin-bottom: 10px;
+        }
+        
+        .host-info {
+            display: inline-block;
+            font-size: 0.8rem;
+            background-color: #2a5699;
+            color: white;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-left: 8px;
+        }
+        
+        .terminal-container {
+            flex: 1;
+            background-color: #000;
+            border-radius: 5px;
+            padding: 5px;
+            overflow: hidden;
+        }
+        
+        #terminal {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .footer {
+            margin-top: 10px;
+            font-size: 0.8rem;
+            color: #888;
+            text-align: center;
+        }
+        
+        #status {
+            padding: 4px 8px;
+            background-color: #333;
+            color: #ccc;
+            font-size: 0.8rem;
+            font-family: monospace;
+            margin-bottom: 5px;
+            border-radius: 3px;
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        
+        #connection-status {
+            color: #ff5c5c;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        
+        .connected {
+            color: #4caf50 !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Web终端 <span class="host-info">宿主机Shell</span></h1>
+            <div class="subtitle">
+                通过WebSocket连接到Docker宿主机的Bash环境
+                <span id="connection-status">未连接</span>
+            </div>
+        </div>
+        
+        <div id="status">状态: 正在初始化...</div>
+        
+        <div class="terminal-container">
+            <div id="terminal"></div>
+        </div>
+        
+        <div class="footer">
+            Terminal WebSocket Service Demo
+        </div>
+    </div>
+    
+    <!-- 使用CDN资源代替WebJars -->
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.1.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.7.0/lib/xterm-addon-fit.min.js"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const statusElement = document.getElementById('status');
+            const connectionStatusElement = document.getElementById('connection-status');
+            
+            function updateStatus(message, isError = false) {
+                const timestamp = new Date().toLocaleTimeString();
+                statusElement.innerHTML += `<div${isError ? ' style="color:#ff6b6b"' : ''}>[${timestamp}] ${message}</div>`;
+                statusElement.scrollTop = statusElement.scrollHeight;
+                console.log(`[状态] ${message}`);
+            }
+            
+            function updateConnectionStatus(connected, text = null) {
+                connectionStatusElement.textContent = text || (connected ? '已连接' : '未连接');
+                if (connected) {
+                    connectionStatusElement.classList.add('connected');
+                } else {
+                    connectionStatusElement.classList.remove('connected');
+                }
+            }
+            
+            // 创建终端实例
+            const terminal = new Terminal({
+                cursorBlink: true,
+                theme: {
+                    background: '#000',
+                    foreground: '#f8f8f8'
+                },
+                fontFamily: 'Consolas, "Courier New", monospace',
+                fontSize: 14,
+                lineHeight: 1.2
+            });
+            
+            updateStatus("终端实例已创建");
+            
+            // 创建终端自适应插件
+            const fitAddon = new FitAddon.FitAddon();
+            terminal.loadAddon(fitAddon);
+            
+            // 在DOM中加载终端
+            terminal.open(document.getElementById('terminal'));
+            fitAddon.fit();
+            updateStatus("终端已加载到DOM");
+            
+            // 用于跟踪连接状态
+            let isConnected = false;
+            let hasReceivedData = false;
+            let sessionId = null;
+            
+            // 创建WebSocket连接
+            updateStatus("正在建立WebSocket连接...");
+            const protocol = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+            const wsUrl = `${protocol}${window.location.host}/terminal`;
+            const socket = new WebSocket(wsUrl);
+            
+            // 连接建立时初始化终端
+            socket.onopen = function() {
+                updateStatus("WebSocket连接已建立");
+                updateConnectionStatus(true, '已连接，等待初始化...');
+                isConnected = true;
+                
+                terminal.write("\r\n\x1b[33m正在连接终端，请稍候...\x1b[0m\r\n");
+                
+                // 发送初始化命令
+                updateStatus("发送初始化命令");
+                sendCommand('TERMINAL_INIT', {
+                    cols: terminal.cols,
+                    rows: terminal.rows
+                });
+                
+                // 当用户在终端中输入内容时
+                terminal.onData(function(data) {
+                    // 发送用户输入到服务器
+                    if (isConnected) {
+                        try {
+                            sendCommand('TERMINAL_COMMAND', {
+                                data: data
+                            });
+                        } catch (e) {
+                            updateStatus(`发送命令失败: ${e.message}`, true);
+                        }
+                    }
+                });
+                
+                // 当终端大小改变时
+                window.addEventListener('resize', function() {
+                    if (isConnected) {
+                        fitAddon.fit();
+                        try {
+                            sendCommand('TERMINAL_RESIZE', {
+                                cols: terminal.cols,
+                                rows: terminal.rows
+                            });
+                            updateStatus(`终端大小已调整为 ${terminal.cols}x${terminal.rows}`);
+                        } catch (e) {
+                            updateStatus(`调整终端大小失败: ${e.message}`, true);
+                        }
+                    }
+                });
+                
+                // 设置超时检查
+                setTimeout(function() {
+                    if (!hasReceivedData) {
+                        updateStatus("警告: 尚未收到任何终端数据", true);
+                        terminal.write("\r\n\x1b[31m警告: 未收到任何终端数据，可能存在连接问题。\x1b[0m\r\n");
+                    }
+                }, 5000);
+            };
+            
+            // 处理单个消息
+            function handleMessage(message) {
+                if (!message || typeof message !== 'object' || !message.type) {
+                    console.error("收到无效消息格式:", message);
+                    return;
+                }
+                
+                switch (message.type) {
+                    case 'TERMINAL_CONNECTED':
+                        sessionId = message.sessionId;
+                        updateStatus(`终端会话已连接, ID: ${sessionId}`);
+                        updateConnectionStatus(true, '已连接');
+                        if (message.data) {
+                            terminal.write(message.data);
+                        }
+                        break;
+                        
+                    case 'TERMINAL_READY':
+                        updateStatus("终端就绪");
+                        updateConnectionStatus(true, '终端就绪');
+                        terminal.write('\r\n\x1b[32m欢迎使用宿主机Web终端!\x1b[0m\r\n');
+                        break;
+                        
+                    case 'TERMINAL_OUTPUT':
+                        if (message.data) {
+                            terminal.write(message.data);
+                        }
+                        break;
+                        
+                    case 'TERMINAL_ERROR':
+                        updateStatus(`终端错误: ${message.error}`, true);
+                        terminal.write(`\r\n\x1b[31m错误: ${message.error}\x1b[0m\r\n`);
+                        break;
+                        
+                    case 'TERMINAL_MESSAGE':
+                        if (message.data) {
+                            terminal.write(message.data);
+                        }
+                        
+                        if (message.level === 'error') {
+                            updateStatus(`终端消息(错误): ${message.data}`, true);
+                        } else if (message.level === 'warning') {
+                            updateStatus(`终端消息(警告): ${message.data}`);
+                        } else {
+                            updateStatus(`终端消息: ${message.data}`);
+                        }
+                        
+                        // 检查终端会话是否结束
+                        if (message.event === 'terminated') {
+                            updateConnectionStatus(false, '终端已结束');
+                        }
+                        break;
+                        
+                    default:
+                        updateStatus(`收到未知消息类型: ${message.type}`);
+                }
+            }
+            
+            // 接收服务器数据
+            socket.onmessage = function(event) {
+                hasReceivedData = true;
+                
+                try {
+                    // 尝试解析为JSON
+                    const data = JSON.parse(event.data);
+                    
+                    // 处理批量消息
+                    if (data.type === 'TERMINAL_BATCH' && Array.isArray(data.messages)) {
+                        updateStatus(`收到批量消息: ${data.messages.length} 条`);
+                        for (const message of data.messages) {
+                            handleMessage(message);
+                        }
+                    } else {
+                        // 处理单条消息
+                        handleMessage(data);
+                    }
+                } catch (e) {
+                    // 解析JSON失败
+                    updateStatus(`解析消息失败: ${e.message}`, true);
+                    console.error("解析WebSocket消息失败:", e, "原始数据:", event.data);
+                    
+                    // 尝试直接显示原始数据
+                    try {
+                        terminal.write(event.data);
+                    } catch (displayError) {
+                        console.error("无法显示原始消息:", displayError);
+                    }
+                }
+            };
+            
+            // 连接关闭
+            socket.onclose = function(event) {
+                isConnected = false;
+                updateStatus(`WebSocket连接已关闭 (代码: ${event.code})`, true);
+                updateConnectionStatus(false, '连接已关闭');
+                terminal.write('\r\n\x1b[31m连接已关闭\x1b[0m\r\n');
+                terminal.options.cursorBlink = false;
+            };
+            
+            // 连接错误
+            socket.onerror = function(error) {
+                updateStatus(`WebSocket错误: ${error ? JSON.stringify(error) : "未知错误"}`, true);
+                updateConnectionStatus(false, '连接错误');
+                terminal.write('\r\n\x1b[31m连接错误\x1b[0m\r\n');
+            };
+            
+            // 发送命令的辅助函数
+            function sendCommand(type, params = {}) {
+                if (socket.readyState === WebSocket.OPEN) {
+                    const command = {
+                        type: type,
+                        ...params
+                    };
+                    socket.send(JSON.stringify(command));
+                } else {
+                    updateStatus(`尝试发送命令时WebSocket未连接，状态: ${socket.readyState}`, true);
+                    throw new Error("WebSocket未连接");
+                }
+            }
+            
+            // 处理页面关闭
+            window.addEventListener('beforeunload', function() {
+                if (socket && socket.readyState === WebSocket.OPEN) {
+                    socket.close();
+                }
+            });
+            
+            // 聚焦终端
+            terminal.focus();
+        });
+    </script>
+</body>
+</html> 

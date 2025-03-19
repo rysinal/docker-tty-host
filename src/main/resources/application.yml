@@ -1,0 +1,30 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  application:
+    name: terminal-ws
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+  mvc:
+    static-path-pattern: /**
+
+terminal:
+  init:
+    timeout: 500
+  use:
+    simple:
+      mode: false
+  nsenter:
+    path: /usr/bin/nsenter
+  shell:
+    paths: /bin/bash,/bin/sh,/bin/zsh,/usr/bin/bash,/usr/bin/sh
+
+# 日志配置
+logging:
+  level:
+    root: info
+    com.terminal.ws: debug 
